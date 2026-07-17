@@ -16,7 +16,7 @@ cymem==2.0.11
 diffusers==0.39.0
 en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl#sha256=293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63
 fastapi==0.115.12
-filelock==3.18.0
+filelock==3.20.3
 flatbuffers==25.2.10
 fonttools==4.63.0
 fsspec==2025.3.2
