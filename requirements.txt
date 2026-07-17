@@ -4,7 +4,7 @@ opencv-python>=4.7.0
 spacy>=3.5.0
 numpy>=1.23.0
 scikit-learn>=1.2.0
-transformers==4.30.2
+transformers==5.5.0
 torch>=2.0.0
 python-dotenv>=1.0.0
 fastapi>=0.95.0
