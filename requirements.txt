@@ -16,7 +16,7 @@ cymem==2.0.11
 diffusers==0.39.0
 en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl#sha256=293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63
 fastapi==0.115.12
-filelock==3.18.0
+filelock==3.30.2
 flatbuffers==25.2.10
 fonttools==4.63.0
 fsspec==2025.3.2
@@ -39,7 +39,7 @@ langcodes==3.5.0
 language_data==1.3.0
 libclang==18.1.1
 marisa-trie==1.2.1
-Markdown==3.8
+Markdown==3.10.2
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
 matplotlib==3.10.3
@@ -59,13 +59,13 @@ preshed==3.0.9
 protobuf==7.35.1
 pydantic==2.11.4
 pydantic_core==2.33.2
-Pygments==2.19.1
+Pygments==2.20.0
 pyparsing==3.2.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 PyYAML==6.0.2
 regex==2026.7.10
-requests==2.32.3
+requests==2.34.2
 rich==14.0.0
 safetensors==0.8.0
 scikit-learn==1.6.1
@@ -88,7 +88,7 @@ termcolor==3.1.0
 thinc==8.3.6
 threadpoolctl==3.6.0
 tokenizers==0.22.2
-torch==2.7.0
+torch==2.13.0
 tqdm==4.67.1
 transformers==5.14.1
 typer==0.15.3
