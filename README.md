@@ -114,7 +114,7 @@ pip install pyinstaller
 python build.py
 ```
 
-This produces `dist\Script2Storyboard\Script2Storyboard.exe`. It's a folder build: keep the whole `Script2Storyboard` folder together. It's several GB because it bundles PyTorch. The image and emotion models download on first run, as with the Python version.
+This produces `dist\Script2Storyboard\Script2Storyboard.exe`. It's a folder build: keep the whole `Script2Storyboard` folder together. It's about 5 GB because it bundles PyTorch with CUDA. Tested: the build runs the sample script on the GPU in about 1.5 minutes. The image and emotion models download on first run, as with the Python version.
 
 ## License
 
