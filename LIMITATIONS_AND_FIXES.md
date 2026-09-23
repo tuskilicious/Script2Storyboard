@@ -1,33 +1,21 @@
-# Limitations and Potential Fixes
+# Limitations and Fixes
 
-## Current Limitations
+## Addressed
 
-1. **CLIP Token Length**: The system currently truncates input text to 77 tokens, which may lead to loss of context in longer scenes. This can affect the quality of the generated storyboard.
+1. **CLIP token length**: Stable Diffusion's text encoder reads only 77 tokens. The script is now parsed as a screenplay (headings, character cues, dialogue, parentheticals), and the image prompt uses only the location, the action lines and the mood. Dialogue, which the camera can't see, is left out, so a typical scene fits.
 
-2. **GPU Dependency**: The system relies on CUDA for GPU acceleration. If a GPU is not available, the performance may be significantly degraded.
+2. **GPU dependency**: Stable Diffusion runs on CPU when CUDA isn't available (slower), with attention slicing to lower memory. `--backend fallback` renders simple frames with no GPU or model download, and `--backend gemini` uses a hosted model.
 
-3. **Model Compatibility**: The system uses specific versions of libraries (e.g., TensorFlow, PyTorch, diffusers). Any updates to these libraries may lead to compatibility issues.
+3. **Model compatibility**: `requirements.txt` lists only the packages the code imports. Unused TensorFlow, Keras and TensorBoard were removed. The Stable Diffusion checkpoint can be swapped with `SD_MODEL_ID`.
 
-4. **Error Handling**: The current implementation lacks robust error handling, which may lead to unexpected crashes or behavior.
+4. **Error handling**: The API rejects non-UTF-8 files and scripts with no scenes with a 400 response. The emotion classifier truncates long scenes instead of crashing. Failed Gemini or Nano Banana requests fall back to the local renderer.
 
-5. **Scalability**: The system may not scale well with very large scripts or high-resolution images, potentially leading to memory issues.
+5. **User interface**: `uvicorn src.api.main:app` serves an upload page at `/`. Pick a script and get the storyboard PDF back, with no command line needed.
 
-6. **User Interface**: The system is command-line based, which may not be user-friendly for non-technical users.
+## Remaining
 
-## Potential Fixes
+1. **Very long scripts**: Frames are generated one at a time, and the PDF is built from all frames at the end. A feature-length script works but is slow on CPU. Batching several prompts per Stable Diffusion call would help on a GPU.
 
-1. **CLIP Token Length**: Implement a sliding window approach to process longer texts in chunks, ensuring that no context is lost.
+2. **Character consistency**: A shared seed keeps the style consistent, but the same character can look different from frame to frame. Fixing that needs a reference-image approach (for example IP-Adapter).
 
-2. **GPU Dependency**: Add fallback mechanisms to use CPU processing when a GPU is not available, and optimize the code for CPU usage.
-
-3. **Model Compatibility**: Regularly update the dependencies and test the system with the latest versions of the libraries. Use virtual environments to manage dependencies.
-
-4. **Error Handling**: Implement comprehensive error handling and logging to capture and address issues gracefully.
-
-5. **Scalability**: Optimize the code for memory usage and consider using batch processing for large scripts. Implement caching mechanisms to reduce redundant computations.
-
-6. **User Interface**: Develop a graphical user interface (GUI) to make the system more accessible to non-technical users.
-
-## Conclusion
-
-By addressing these limitations, the system can be improved to be more robust, scalable, and user-friendly. Regular updates and testing will ensure that the system remains compatible with the latest technologies and user needs. 
+3. **Long single scenes**: A scene with a very long action block can still exceed 77 tokens, and the end of the prompt is cut off. Splitting such scenes into several shots, one frame per paragraph, would fix this.

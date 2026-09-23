@@ -77,6 +77,8 @@ The script is parsed as a screenplay: scene headings (`INT.` / `EXT.`), characte
 uvicorn src.api.main:app
 ```
 
+Open http://127.0.0.1:8000 for a simple upload page: pick a script and get the storyboard PDF back.
+
 `POST /analyze-script` returns the scene analysis as JSON. `POST /generate-storyboard` returns the PDF. Both take the script as a multipart `file` upload.
 
 ### Tests

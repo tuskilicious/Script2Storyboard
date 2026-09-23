@@ -110,6 +110,7 @@ class StoryboardGenerator:
                 torch_dtype=dtype,
             )
             self.text_to_image = self.text_to_image.to(device)
+            self.text_to_image.enable_attention_slicing()  # lower peak memory, small speed cost
             self._stable_diffusion_device = device
             return True
         except Exception:
