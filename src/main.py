@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 from nlp.script_analyzer import ScriptAnalyzer
 from vision.storyboard_generator import StoryboardGenerator
@@ -9,17 +10,20 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description='Script to Storyboard Generator')
     parser.add_argument('--script', required=True, help='Path to the script file')
+    parser.add_argument('--backend', default='auto',
+                        choices=['auto', 'stable-diffusion', 'gemini', 'nano-banana', 'fallback'],
+                        help='Image backend (default: first one available)')
+    parser.add_argument('--output', default='output', help='Output folder')
+    parser.add_argument('--no-open', action='store_true', help="Don't open the PDF when done")
     args = parser.parse_args()
 
-    # Initialize components
-    script_analyzer = ScriptAnalyzer()
-    storyboard_generator = StoryboardGenerator(backend="stable-diffusion")
-
-    # Read script
+    # Read script before loading any models, so a typo fails fast
     script_path = Path(args.script)
     if not script_path.exists():
-        print(f"Error: Script file not found at {args.script}")
-        return
+        sys.exit(f"Error: Script file not found at {args.script}")
+
+    script_analyzer = ScriptAnalyzer()
+    storyboard_generator = StoryboardGenerator(backend=args.backend)
 
     with open(script_path, 'r', encoding='utf-8') as f:
         script_text = f.read()
@@ -41,16 +45,9 @@ def main():
 
     # Always generate storyboard
     print("\nGenerating storyboard...")
-    scene_dicts = [
-        {
-            "id": scene.id,
-            "content": scene.content,
-            "type": scene.type
-        }
-        for scene in scenes
-    ]
-    
-    output_dir = Path("output")
+    scene_dicts = [asdict(scene) for scene in scenes]
+
+    output_dir = Path(args.output)
     output_dir.mkdir(exist_ok=True)
     
     image_paths = storyboard_generator.generate_storyboard(
@@ -72,7 +69,8 @@ def main():
             os.startfile(filepath)
         elif os.name == 'posix':
             subprocess.call(('xdg-open', filepath))
-    open_file(str(pdf_path))
+    if not args.no_open:
+        open_file(str(pdf_path))
 
 if __name__ == "__main__":
     main() 

@@ -1,72 +1,57 @@
 # -*- mode: python ; coding: utf-8 -*-
-import os
-import spacy
-import site
+# Build with: python build.py   (output: dist/Script2Storyboard/Script2Storyboard.exe)
+#
+# One-folder build: a one-file exe would unpack several GB of PyTorch to a temp
+# folder on every launch. Hugging Face models are not bundled; they download to the
+# normal cache on first run, like the Python version.
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
-block_cipher = None
+datas, binaries, hiddenimports = [], [], []
 
-# Get the path to the spaCy model
-site_packages = site.getsitepackages()[0]
-spacy_model_path = os.path.join(site_packages, 'en_core_web_lg')
+# The spaCy model is an installed package, so collect it like one.
+d, b, h = collect_all("en_core_web_lg")
+datas += d
+binaries += b
+hiddenimports += h
+
+# transformers and diffusers check these packages' versions via importlib.metadata at import time.
+for package in ("transformers", "diffusers", "tokenizers", "huggingface_hub", "safetensors", "tqdm",
+                "regex", "requests", "packaging", "filelock", "numpy", "pyyaml", "torch", "accelerate"):
+    datas += copy_metadata(package)
 
 a = Analysis(
     ['src/main.py'],
-    pathex=[],
-    binaries=[],
-    datas=[
-        ('requirements.txt', '.'),
-        ('README.md', '.'),
-        ('src', 'src'),
-    ],
-    hiddenimports=[
-        'transformers',
-        'transformers.utils',
-        'transformers.utils.logging',
-        'transformers.utils.import_utils',
-        'transformers.utils.generic',
-        'transformers.utils.versions',
-        'transformers.dependency_versions_check',
-        'torch',
-        'tensorflow',
-        'spacy',
-        'numpy',
-        'sklearn',
-        'diffusers',
-        'accelerate',
-        'logging',
-        'logging.handlers',
-        'logging.config',
-    ],
+    pathex=['src'],
+    binaries=binaries,
+    datas=datas + [('examples/sample_script.txt', 'examples')],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['transformers_hook.py', 'spacy_hook.py'],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    runtime_hooks=[],
+    excludes=['tensorflow', 'tensorboard', 'keras', 'matplotlib', 'tkinter'],
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='Script2Storyboard',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
+    upx=False,  # UPX breaks some CUDA DLLs and barely shrinks them
     console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='Script2Storyboard',
 )
