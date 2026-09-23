@@ -12,13 +12,12 @@ An AI-powered system that converts film scripts into visual storyboards using NL
 
 ## Example Output
 
-The repository now includes a sample input script and a generated storyboard example.
+Generated from [examples/sample_script.txt](examples/sample_script.txt) with the Stable Diffusion backend:
 
-![Sample storyboard frame](examples/scene_001.png)
+![Sample storyboard sheet](examples/storyboard-sheet.jpg)
 
-- Sample input script: [examples/sample_script.txt](examples/sample_script.txt)
-- Generated storyboard PDF: [examples/storyboard-example.pdf](examples/storyboard-example.pdf)
-- Additional storyboard frames: [examples/scene_001.png](examples/scene_001.png) to [examples/scene_006.png](examples/scene_006.png)
+- Storyboard PDF: [examples/storyboard-example.pdf](examples/storyboard-example.pdf)
+- Individual panels: [scene_001.png](examples/scene_001.png), [scene_002.png](examples/scene_002.png), [scene_003.png](examples/scene_003.png)
 
 ## Project Structure
 
@@ -51,6 +50,12 @@ pip install -r requirements.txt
 python -m spacy download en_core_web_lg
 ```
 
+4. **If you have an NVIDIA GPU**, install the CUDA build of PyTorch. The default `pip install torch` on Windows is CPU-only, so Stable Diffusion takes minutes per frame instead of seconds:
+```bash
+pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
+```
+Check it worked with `python -c "import torch; print(torch.cuda.is_available())"`. It should print `True`. A 4 GB card is enough, since the model runs in half precision with attention slicing.
+
 ## Usage
 
 Run the generator with any script file:
@@ -63,7 +68,7 @@ The generated storyboard PDF will be written to the output folder.
 
 Options:
 
-- `--backend auto|stable-diffusion|gemini|nano-banana|fallback`: image backend. `auto` picks the first one available. `fallback` needs no GPU or API key.
+- `--backend auto|stable-diffusion|gemini|fallback`: image backend. `auto` tries Stable Diffusion, then Gemini. `gemini` (also accepted as `nano-banana`, Google's name for the same model) needs `GEMINI_API_KEY`. `fallback` draws empty placeholder frames, so the storyboard layout and captions still work with no model.
 - `--output DIR`: output folder (default `output`).
 - `--no-open`: don't open the PDF when done.
 
