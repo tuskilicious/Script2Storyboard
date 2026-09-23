@@ -1,9 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
+from dataclasses import asdict
+import shutil
 import tempfile
 import os
-from typing import List
-import json
 
 from ..nlp.script_analyzer import ScriptAnalyzer
 from ..vision.storyboard_generator import StoryboardGenerator
@@ -15,73 +16,42 @@ script_analyzer = ScriptAnalyzer()
 storyboard_generator = StoryboardGenerator()
 
 @app.post("/analyze-script")
-async def analyze_script(file: UploadFile = File(...)):
+def analyze_script(file: UploadFile = File(...)):
     """Analyze a script file and return scene analysis."""
     try:
-        # Read script content
-        content = await file.read()
-        script_text = content.decode()
+        script_text = file.file.read().decode()
         
         # Process script
         scenes = script_analyzer.process_script(script_text)
         
-        # Convert scenes to dict for JSON serialization
-        scene_dicts = [
-            {
-                "id": scene.id,
-                "content": scene.content,
-                "type": scene.type,
-                "emotions": scene.emotions,
-                "actions": scene.actions,
-                "characters": scene.characters
-            }
-            for scene in scenes
-        ]
-        
-        return {"scenes": scene_dicts}
+        return {"scenes": [asdict(scene) for scene in scenes]}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-storyboard")
-async def generate_storyboard(file: UploadFile = File(...)):
+def generate_storyboard(file: UploadFile = File(...)):
     """Generate storyboard from script file."""
+    # Plain def: FastAPI runs it in a worker thread, so image generation doesn't block the server.
+    # The temp dir is removed after the response is sent, not before.
+    temp_dir = tempfile.mkdtemp()
     try:
-        # Create temporary directory for output
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Read and analyze script
-            content = await file.read()
-            script_text = content.decode()
-            scenes = script_analyzer.process_script(script_text)
-            
-            # Convert scenes to dict format
-            scene_dicts = [
-                {
-                    "id": scene.id,
-                    "content": scene.content,
-                    "type": scene.type
-                }
-                for scene in scenes
-            ]
-            
-            # Generate storyboard images
-            image_paths = storyboard_generator.generate_storyboard(
-                scene_dicts, 
-                output_dir=temp_dir
-            )
-            
-            # Create PDF
-            pdf_path = os.path.join(temp_dir, "storyboard.pdf")
-            storyboard_generator.create_storyboard_pdf(image_paths, pdf_path)
-            
-            # Return PDF file
-            return FileResponse(
-                pdf_path,
-                media_type="application/pdf",
-                filename="storyboard.pdf"
-            )
-    
+        script_text = file.file.read().decode()
+        scenes = script_analyzer.process_script(script_text)
+        image_paths = storyboard_generator.generate_storyboard(
+            [asdict(scene) for scene in scenes],
+            output_dir=temp_dir
+        )
+        pdf_path = os.path.join(temp_dir, "storyboard.pdf")
+        storyboard_generator.create_storyboard_pdf(image_paths, pdf_path)
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename="storyboard.pdf",
+            background=BackgroundTask(shutil.rmtree, temp_dir, ignore_errors=True)
+        )
     except Exception as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

@@ -61,6 +61,30 @@ python src/main.py --script path/to/script.txt
 
 The generated storyboard PDF will be written to the output folder.
 
+Options:
+
+- `--backend auto|stable-diffusion|gemini|nano-banana|fallback`: image backend. `auto` picks the first one available. `fallback` needs no GPU or API key.
+- `--output DIR`: output folder (default `output`).
+- `--no-open`: don't open the PDF when done.
+
+Environment variables (can go in a `.env` file): `GEMINI_API_KEY` for the Gemini backend, `SD_MODEL_ID` to use a different Stable Diffusion checkpoint, `SD_SEED` to change the seed shared by all frames (default 42, which keeps the frames visually consistent).
+
+The script is parsed as a screenplay: scene headings (`INT.` / `EXT.`), character cues and dialogue are separated, so the image prompt describes only what the camera sees (location, action, mood). This keeps it short enough for Stable Diffusion's 77-token CLIP limit.
+
+### API
+
+```bash
+uvicorn src.api.main:app
+```
+
+`POST /analyze-script` returns the scene analysis as JSON. `POST /generate-storyboard` returns the PDF. Both take the script as a multipart `file` upload.
+
+### Tests
+
+```bash
+python -m unittest tests.test_storyboard_generator
+```
+
 ## License
 
 MIT License

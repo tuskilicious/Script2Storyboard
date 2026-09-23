@@ -1,6 +1,7 @@
 import base64
 import io
 import os
+import re
 import textwrap
 from functools import lru_cache
 from typing import List, Tuple
@@ -20,11 +21,6 @@ except ImportError:  # pragma: no cover - exercised when torch is unavailable
     torch = None
 
 try:
-    from transformers import pipeline
-except ImportError:  # pragma: no cover - exercised when transformers is unavailable
-    pipeline = None
-
-try:
     from diffusers import StableDiffusionPipeline
 except ImportError:  # pragma: no cover - exercised when diffusers is unavailable
     StableDiffusionPipeline = None
@@ -41,7 +37,6 @@ class StoryboardGenerator:
     def __init__(self, backend: str = "auto"):
         self._load_env_file()
 
-        self.image_generator = None
         self.text_to_image = None
         self._stable_diffusion_device = None
 
@@ -53,12 +48,6 @@ class StoryboardGenerator:
                 self.backend = "gemini"
             elif self._nano_banana_available():
                 self.backend = "nano-banana"
-
-        if pipeline is not None:
-            try:
-                self.image_generator = pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
-            except Exception:
-                self.image_generator = None
 
     def _load_env_file(self) -> None:
         candidate_paths = [
@@ -117,7 +106,7 @@ class StoryboardGenerator:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             dtype = torch.float16 if device == "cuda" else torch.float32
             self.text_to_image = StableDiffusionPipeline.from_pretrained(
-                "runwayml/stable-diffusion-v1-5",
+                os.getenv("SD_MODEL_ID", "runwayml/stable-diffusion-v1-5"),
                 torch_dtype=dtype,
             )
             self.text_to_image = self.text_to_image.to(device)
@@ -129,11 +118,21 @@ class StoryboardGenerator:
             return False
 
     def _build_stable_diffusion_prompt(self, scene_description: str) -> str:
+        # CLIP reads only ~77 tokens, so keep the style tags short and the scene first.
         clean_prompt = scene_description.strip() or "cinematic storyboard scene"
-        return (
-            f"cinematic storyboard scene, {clean_prompt}, clear composition, detailed environment, "
-            "high quality, film still, visible characters"
-        )
+        return f"{clean_prompt}, storyboard sketch, film still, clear composition"
+
+    @staticmethod
+    def scene_prompt(scene: dict) -> str:
+        """Describe what the camera sees: location, action and mood, not the dialogue."""
+        heading = scene.get("heading", "")
+        location = re.sub(r"^\s*(?:INT\.?/EXT|EXT\.?/INT|I/E|INT|EXT)[.\s-]*", "", heading, flags=re.IGNORECASE)
+        parts = [location.strip(" -.").lower(), scene.get("action_text", "")]
+        emotions = [e for e in scene.get("emotions", []) if e != "neutral"]
+        if emotions:
+            parts.append(f"{emotions[0]} mood")
+        prompt = ", ".join(p.strip(" .") for p in parts if p.strip(" ."))
+        return prompt or scene.get("content", "")
 
     @lru_cache(maxsize=256)
     def _scene_theme(self, description: str) -> str:
@@ -185,7 +184,7 @@ class StoryboardGenerator:
         if not api_key:
             return None
 
-        api_url = os.getenv("GEMINI_API_URL") or "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent"
+        api_url = os.getenv("GEMINI_API_URL") or "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
         payload = {
             "contents": [
                 {
@@ -196,7 +195,7 @@ class StoryboardGenerator:
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
         }
         try:
-            response = requests.post(api_url, params={"key": api_key}, json=payload, timeout=90)
+            response = requests.post(api_url, headers={"x-goog-api-key": api_key}, json=payload, timeout=90)
             response.raise_for_status()
             data = response.json()
         except Exception:
@@ -303,12 +302,6 @@ class StoryboardGenerator:
         cv2.line(image, (width // 3, 6), (width // 3, height - 7), (255, 255, 255), 2)
         cv2.line(image, (width * 2 // 3, 6), (width * 2 // 3, height - 7), (255, 255, 255), 2)
 
-        # Scene title strip
-        title = scene_description.strip()[:70]
-        if title:
-            cv2.rectangle(image, (12, 12), (width - 12, 46), (10, 10, 10), -1)
-            cv2.putText(image, title, (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
-
         return image
 
     def _draw_cityscape(self, image: np.ndarray) -> None:
@@ -390,6 +383,8 @@ class StoryboardGenerator:
                     num_inference_steps=20,
                     guidance_scale=7.5,
                     negative_prompt="blurry, low quality, distorted, text, watermark, duplicate",
+                    # Same seed for every frame keeps the storyboard's look consistent.
+                    generator=torch.Generator(self._stable_diffusion_device).manual_seed(int(os.getenv("SD_SEED", "42"))),
                     height=size[1],
                     width=size[0],
                 )
@@ -433,7 +428,7 @@ class StoryboardGenerator:
         output_paths = []
         
         for index, scene in enumerate(scenes, 1):
-            image = self.generate_storyboard_frame(scene['content'])
+            image = self.generate_storyboard_frame(self.scene_prompt(scene))
             image = self.add_storyboard_elements(image, scene)
             output_path = os.path.join(output_dir, f"scene_{index:03d}.png")
             cv2.imwrite(output_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
