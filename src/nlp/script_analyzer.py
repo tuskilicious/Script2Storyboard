@@ -17,6 +17,13 @@ HEADING_RE = re.compile(r"^\s*(?:INT\.?/EXT|EXT\.?/INT|I/E|INT|EXT)[.\s-]", re.I
 # Character cue: an all-caps line, optionally followed by an extension like (V.O.) or (CONT'D).
 CUE_RE = re.compile(r"^\s*([A-Z][A-Z0-9 .'\-]*?)\s*(?:\([^)]*\))?\s*$")
 TRANSITION_RE = re.compile(r"(?:TO:|FADE (?:IN|OUT)\.?|CUT TO BLACK\.?)\s*$")
+# Camera directions written in the script ("CLOSE ON SARAH'S PHONE") start a shot with that framing.
+SHOT_RE = re.compile(
+    r"^(EXTREME CLOSE[- ]UP|CLOSE[- ]UP|CLOSE ON|INSERT|WIDE SHOT|WIDE ON|ESTABLISHING SHOT|"
+    r"MEDIUM SHOT|ANGLE ON|POV|TWO[- ]SHOT)\b[\s:.-]*(.*)$"
+)
+SHOT_CAMERAS = {"WIDE": "WIDE", "ESTABLISHING": "WIDE", "MEDIUM": "MEDIUM", "ANGLE": "MEDIUM",
+                "POV": "MEDIUM", "TWO": "TWO-SHOT"}
 
 
 @dataclass
@@ -30,16 +37,35 @@ class Scene:
     heading: str = ""
     action_text: str = ""  # non-dialogue lines: what the camera actually sees
     dialogue: List[str] = field(default_factory=list)
+    # One storyboard frame each: {"action", "dialogue", "camera", "emotion"}
+    shots: List[dict] = field(default_factory=list)
+
+
+def camera_for(shot: dict, index: int) -> str:
+    """Pick the framing a storyboard artist would default to."""
+    speakers = {d.split(":", 1)[0] for d in shot["dialogue"]}
+    if index == 0 and shot["action"]:
+        return "WIDE"  # establish the location first
+    if len(speakers) >= 2:
+        return "TWO-SHOT"
+    if speakers:
+        return "MEDIUM"
+    if len(shot["action"].split()) <= 6:
+        return "CLOSE-UP"  # short beats like "She smiles."
+    return "MEDIUM WIDE"
 
 
 def parse_screenplay_scene(scene_text: str) -> dict:
-    """Split one scene into heading, action lines, character cues and dialogue."""
-    heading, action, dialogue, characters = "", [], [], []
-    speaker = None
+    """Split one scene into heading, action, character cues, dialogue and shots.
+
+    Each action paragraph starts a new shot; dialogue belongs to the shot before it.
+    """
+    heading, action, dialogue, characters, shots = "", [], [], [], []
+    speaker, new_paragraph = None, True
     for raw in scene_text.split("\n"):
         line = raw.strip()
         if not line:
-            speaker = None  # a blank line ends a dialogue block
+            speaker, new_paragraph = None, True  # a blank line ends a dialogue block
             continue
         if not heading and HEADING_RE.match(line):
             heading = line
@@ -47,15 +73,37 @@ def parse_screenplay_scene(scene_text: str) -> dict:
         if speaker:
             if not (line.startswith("(") and line.endswith(")")):  # skip parentheticals
                 dialogue.append(f"{speaker}: {line}")
+                shots[-1]["dialogue"].append(f"{speaker}: {line}")
+            continue
+        direction = SHOT_RE.match(line)
+        if direction:
+            # Checked before cues: "CLOSE ON SARAH" is all caps but isn't a character.
+            framing, subject = direction.groups()
+            subject = subject.strip().capitalize()
+            if subject and subject[-1] not in ".!?":
+                subject += "."
+            shots.append({"action": subject, "dialogue": [],
+                          "camera": SHOT_CAMERAS.get(framing.split()[0].split("-")[0], "CLOSE-UP")})
+            new_paragraph = False
             continue
         cue = CUE_RE.match(line)
         if cue and line.upper() == line and not TRANSITION_RE.search(line) and len(line.split()) <= 4:
             speaker = cue.group(1).strip()
             if speaker not in characters:
                 characters.append(speaker)
+            if not shots:
+                shots.append({"action": "", "dialogue": []})
             continue
+        if new_paragraph or not shots:
+            shots.append({"action": line, "dialogue": []})
+        else:
+            shots[-1]["action"] = f"{shots[-1]['action']} {line}".strip()
+        new_paragraph = False
         action.append(line)
-    return {"heading": heading, "action": action, "dialogue": dialogue, "characters": characters}
+    for i, shot in enumerate(shots):
+        shot.setdefault("camera", camera_for(shot, i))  # the script's own direction wins
+    return {"heading": heading, "action": action, "dialogue": dialogue,
+            "characters": characters, "shots": shots}
 
 
 class ScriptAnalyzer:
@@ -95,6 +143,10 @@ class ScriptAnalyzer:
         action_text = " ".join(parsed["action"])
         doc = self.nlp(action_text or scene_text) if self.nlp is not None else None
 
+        for shot in parsed["shots"]:
+            spoken = " ".join(d.split(": ", 1)[-1] for d in shot["dialogue"])
+            shot["emotion"] = self._extract_emotions(f"{shot['action']} {spoken}".strip())[0]
+
         return Scene(
             id=scene_id,
             content=scene_text,
@@ -105,13 +157,15 @@ class ScriptAnalyzer:
             heading=parsed["heading"],
             action_text=action_text,
             dialogue=parsed["dialogue"],
+            shots=parsed["shots"],
         )
 
     def _extract_emotions(self, text: str) -> List[str]:
         """Extract emotions from text using the emotion classifier when available."""
         if self.emotion_analyzer is not None:
             result = self.emotion_analyzer(text, truncation=True)
-            return [r['label'] for r in result]
+            # A weak top score means the text isn't clearly emotional; don't force a mood on it.
+            return [r['label'] if r['score'] >= 0.5 else "neutral" for r in result]
 
         lower_text = text.lower()
         if any(word in lower_text for word in ["angry", "furious", "upset"]):

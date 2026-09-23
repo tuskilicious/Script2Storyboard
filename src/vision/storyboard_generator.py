@@ -2,7 +2,7 @@ import base64
 import io
 import os
 import re
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -55,6 +55,8 @@ class StoryboardGenerator:
 
         self.text_to_image = None
         self._stable_diffusion_device = None
+        self._ip_adapter = False
+        self._reference = None
 
         # Resolve once, so a missing model is reported (and retried) once, not per frame.
         self.backend = (backend or "auto").strip().lower()
@@ -118,8 +120,15 @@ class StoryboardGenerator:
                 os.getenv("SD_MODEL_ID", "runwayml/stable-diffusion-v1-5"),
                 torch_dtype=dtype,
             )
-            self.text_to_image = self.text_to_image.to(device)
-            self.text_to_image.enable_attention_slicing()  # lower peak memory, small speed cost
+            self._load_ip_adapter()
+            # No attention slicing: PyTorch 2's built-in attention is already memory-efficient,
+            # and diffusers' sliced attention breaks IP-Adapter.
+            if device == "cuda" and torch.cuda.get_device_properties(0).total_memory < 8 * 1024 ** 3:
+                # Small GPUs can't hold every model at once; spilling into shared memory is ~20x
+                # slower. Offload keeps only the model currently in use on the GPU.
+                self.text_to_image.enable_model_cpu_offload()
+            else:
+                self.text_to_image = self.text_to_image.to(device)
             self._stable_diffusion_device = device
             if device == "cpu":
                 print("Stable Diffusion is running on CPU: expect a few minutes per frame. "
@@ -131,22 +140,90 @@ class StoryboardGenerator:
             self._stable_diffusion_device = None
             return False
 
+    def _reference_strength(self) -> float:
+        # Off by default: tested on the sample script, any strength that kept faces similar also
+        # copied the first frame's composition, so close-ups came out as wide shots.
+        return float(os.getenv("SD_REFERENCE_STRENGTH", "0"))
+
+    def _load_ip_adapter(self) -> None:
+        """IP-Adapter lets a scene's later shots borrow characters and style from its first shot."""
+        if self._reference_strength() <= 0:
+            return
+        try:
+            self.text_to_image.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.bin")
+            self._ip_adapter = True
+        except Exception as e:
+            print(f"IP-Adapter unavailable ({type(e).__name__}: {e}); frames won't share a character reference")
+
     def _build_stable_diffusion_prompt(self, scene_description: str) -> str:
         # CLIP reads only ~77 tokens, so keep the style tags short and the scene first.
         clean_prompt = scene_description.strip() or "cinematic scene"
         return f"storyboard frame, pencil sketch, {clean_prompt}, cinematic composition"
 
+    CAMERA_PHRASES = {
+        "WIDE": "wide establishing shot",
+        "MEDIUM WIDE": "medium wide shot",
+        "MEDIUM": "medium shot",
+        "TWO-SHOT": "medium two-shot",
+        "CLOSE-UP": "close-up",
+    }
+    MOOD_PHRASES = {
+        "joy": "warm cheerful mood",
+        "sadness": "melancholy mood",
+        "fear": "tense nervous mood",
+        "anger": "tense angry mood",
+        "surprise": "surprised expressions",
+        "disgust": "uneasy mood",
+    }
+
     @staticmethod
-    def scene_prompt(scene: dict) -> str:
-        """Describe what the camera sees: location, action and mood, not the dialogue."""
+    def frames_for(scene: dict) -> List[dict]:
+        """One frame per shot, labelled 1A, 1B, ...; a scene without shots is a single frame."""
+        shots = scene.get("shots") or []
+        if not shots:
+            return [scene]
+        frames = []
+        for i, shot in enumerate(shots):
+            suffix = "" if len(shots) == 1 else (chr(65 + i) if i < 26 else f".{i + 1}")
+            frames.append({
+                "id": f"{scene.get('id', '')}{suffix}",
+                "heading": scene.get("heading", ""),
+                "action_text": shot["action"],
+                "dialogue": shot["dialogue"],
+                "camera": shot.get("camera", ""),
+                "emotions": [shot.get("emotion", "neutral")],
+            })
+        return frames
+
+    @classmethod
+    def scene_prompt(cls, scene: dict) -> str:
+        """Describe what the camera sees: location, framing, action and mood, not the dialogue."""
         heading = scene.get("heading", "")
         location = re.sub(r"^\s*(?:INT\.?/EXT|EXT\.?/INT|I/E|INT|EXT)[.\s-]*", "", heading, flags=re.IGNORECASE)
-        parts = [location.strip(" -.").lower(), scene.get("action_text", "")]
-        emotions = [e for e in scene.get("emotions", []) if e != "neutral"]
-        if emotions:
-            parts.append(f"{emotions[0]} mood")
+        action = scene.get("action_text", "")
+        if not action and scene.get("dialogue"):
+            speakers = {d.split(":", 1)[0] for d in scene["dialogue"]}
+            action = "two people talking" if len(speakers) > 1 else "a person talking"
+        parts = [location.strip(" -.").lower(), cls.CAMERA_PHRASES.get(scene.get("camera", ""), ""), action]
+        moods = [cls.MOOD_PHRASES[e] for e in scene.get("emotions", []) if e in cls.MOOD_PHRASES]
+        if moods:
+            parts.append(moods[0])
         prompt = ", ".join(p.strip(" .") for p in parts if p.strip(" ."))
-        return prompt or scene.get("content", "")
+        return cls._describe_pronouns(prompt) or scene.get("content", "")
+
+    PRONOUNS = [(r"\bShe\b", "A woman"), (r"\bshe\b", "a woman"), (r"\bHer\b", "A woman's"),
+                (r"\bHe\b", "A man"), (r"\bhe\b", "a man"), (r"\bHis\b", "A man's"), (r"\bhis\b", "a man's")]
+
+    @classmethod
+    def _describe_pronouns(cls, prompt: str) -> str:
+        """The image model can't resolve "She smiles." to anyone, so name who's in the shot.
+
+        Only unambiguous forms: "his" is always possessive; capitalised "Her" starts a sentence,
+        so it's possessive, while lowercase "her" could be either and is left alone.
+        """
+        for pattern, replacement in cls.PRONOUNS:
+            prompt = re.sub(pattern, replacement, prompt)
+        return prompt
 
     def _image_from_bytes(self, image_bytes: bytes, size: Tuple[int, int]) -> np.ndarray:
         if not image_bytes:
@@ -191,7 +268,7 @@ class StoryboardGenerator:
                     "parts": [{"text": f"Black-and-white pencil storyboard frame, cinematic composition, no text: {scene_description}"}],
                 }
             ],
-            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"], "imageConfig": {"aspectRatio": "16:9"}},
         }
         try:
             response = requests.post(api_url, headers={"x-goog-api-key": api_key}, json=payload, timeout=90)
@@ -221,9 +298,9 @@ class StoryboardGenerator:
         draw.text(((width - small.getlength(note)) / 2, height - 40), note, font=small, fill=(150, 150, 150))
         return np.array(frame)
 
-    def generate_storyboard_frame(self, scene_description: str, 
-                                size: Tuple[int, int] = (512, 512)) -> np.ndarray:
-        """Generate a storyboard frame from scene description."""
+    def generate_storyboard_frame(self, scene_description: str,
+                                  size: Tuple[int, int] = (768, 432), shot_number: int = 0) -> np.ndarray:
+        """Generate a 16:9 storyboard frame (width, height) from a scene description."""
         backend = self._resolve_backend()
         if backend == "gemini":
             image = self._generate_with_gemini(scene_description, size)
@@ -234,17 +311,28 @@ class StoryboardGenerator:
         if backend == "stable-diffusion":
             if self._ensure_stable_diffusion():
                 prompt = self._build_stable_diffusion_prompt(scene_description)
+                extra = {}
+                if self._ip_adapter:
+                    # The first frame has no reference yet: a blank image at scale 0 has no effect.
+                    first = self._reference is None
+                    self.text_to_image.set_ip_adapter_scale(0.0 if first else self._reference_strength())
+                    extra["ip_adapter_image"] = Image.new("RGB", (224, 224)) if first else self._reference
                 result = self.text_to_image(
                     prompt,
-                    num_inference_steps=20,
+                    num_inference_steps=25,
                     guidance_scale=7.5,
-                    negative_prompt="blurry, low quality, distorted, text, watermark, duplicate",
-                    # Same seed for every frame keeps the storyboard's look consistent.
-                    generator=torch.Generator(self._stable_diffusion_device).manual_seed(int(os.getenv("SD_SEED", "42"))),
+                    negative_prompt="blurry, low quality, distorted, text, watermark, duplicate, cropped",
+                    # Reproducible, but a different seed per shot: one shared seed made shots with
+                    # similar prompts come out as near-copies of each other.
+                    generator=torch.Generator(self._stable_diffusion_device).manual_seed(
+                        int(os.getenv("SD_SEED", "42")) + shot_number),
                     height=size[1],
                     width=size[0],
+                    **extra,
                 )
                 image = result.images[0]
+                if self._ip_adapter and self._reference is None:
+                    self._reference = image
                 return np.array(image)
 
         return self._build_fallback_scene(scene_description, size)
@@ -270,7 +358,11 @@ class StoryboardGenerator:
         shot = str(scene_info.get("id", ""))
         draw.text((pad, y), shot, font=title_font, fill=(200, 60, 40))
         shot_w = int(title_font.getlength(shot)) + 12
-        for line in _wrap(heading.upper(), title_font, text_width - shot_w, 1):
+        camera = scene_info.get("camera", "")
+        camera_w = int(body_font.getlength(camera)) + 16 if camera else 0
+        if camera:
+            draw.text((width - pad - body_font.getlength(camera), y + 3), camera, font=body_font, fill=(130, 130, 130))
+        for line in _wrap(heading.upper(), title_font, text_width - shot_w - camera_w, 1):
             draw.text((pad + shot_w, y), line, font=title_font, fill=(20, 20, 20))
         y += 32
         for line in _wrap(action, body_font, text_width, 3 if dialogue else 5):
@@ -284,19 +376,26 @@ class StoryboardGenerator:
                 y += 22
         return np.array(panel)
 
-    def generate_storyboard(self, scenes: List[dict], 
-                          output_dir: str = "output") -> List[str]:
-        """Generate complete storyboard from list of scenes."""
+    def generate_storyboard(self, scenes: List[dict], output_dir: str = "output",
+                            on_progress: Optional[Callable[[int, int], None]] = None) -> List[str]:
+        """Generate one panel per shot; on_progress(done, total) is called after each."""
         os.makedirs(output_dir, exist_ok=True)
+        per_scene = [self.frames_for(scene) for scene in scenes]
+        total = sum(len(frames) for frames in per_scene)
         output_paths = []
-        
-        for index, scene in enumerate(scenes, 1):
-            image = self.generate_storyboard_frame(self.scene_prompt(scene))
-            image = self.add_storyboard_elements(image, scene)
-            output_path = os.path.join(output_dir, f"scene_{index:03d}.png")
-            Image.fromarray(image).save(output_path)
-            output_paths.append(output_path)
-            
+        for frames in per_scene:
+            # Shots in one scene share a reference (same place, same people); a new scene starts fresh.
+            self._reference = None
+            for frame in frames:
+                n = len(output_paths) + 1
+                print(f"Frame {n}/{total} (shot {frame.get('id', n)})")
+                image = self.generate_storyboard_frame(self.scene_prompt(frame), shot_number=n)
+                panel = self.add_storyboard_elements(image, frame)
+                output_path = os.path.join(output_dir, f"frame_{n:03d}.png")
+                Image.fromarray(panel).save(output_path)
+                output_paths.append(output_path)
+                if on_progress:
+                    on_progress(n, total)
         return output_paths
 
     def create_storyboard_pdf(self, image_paths: List[str], output_path: str,

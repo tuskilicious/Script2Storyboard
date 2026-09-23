@@ -4,11 +4,13 @@ An AI-powered system that converts film scripts into visual storyboards using NL
 
 ## Features
 
-- Script parsing and scene segmentation
-- Emotion and action analysis
-- Scene classification for dialogue and action moments
-- Visual storyboard generation with generated frames
-- Example script and output assets included in the repository
+- Screenplay parsing: scene headings, character cues, dialogue and parentheticals
+- One frame per shot: each action paragraph becomes a shot (1A, 1B, ...), with a default camera framing (wide, medium, two-shot, close-up)
+- Emotion analysis per shot, used to set the mood of the image
+- 16:9 pencil-sketch frames from Stable Diffusion (local) or Gemini (hosted)
+- Camera directions in the script (`CLOSE ON`, `WIDE SHOT`, `ANGLE ON`, ...) are respected
+- Storyboard sheets as PDF, 6 panels per landscape page
+- Web page with live progress, plus a JSON API
 
 ## Example Output
 
@@ -17,7 +19,7 @@ Generated from [examples/sample_script.txt](examples/sample_script.txt) with the
 ![Sample storyboard sheet](examples/storyboard-sheet.jpg)
 
 - Storyboard PDF: [examples/storyboard-example.pdf](examples/storyboard-example.pdf)
-- Individual panels: [scene_001.png](examples/scene_001.png), [scene_002.png](examples/scene_002.png), [scene_003.png](examples/scene_003.png)
+- Individual panels: [examples/frame_001.png](examples/frame_001.png) through [frame_007.png](examples/frame_007.png)
 
 ## Project Structure
 
@@ -54,7 +56,7 @@ python -m spacy download en_core_web_lg
 ```bash
 pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
 ```
-Check it worked with `python -c "import torch; print(torch.cuda.is_available())"`. It should print `True`. A 4 GB card is enough, since the model runs in half precision with attention slicing.
+Check it worked with `python -c "import torch; print(torch.cuda.is_available())"`. It should print `True`. A 4 GB laptop GPU (RTX 3050 Ti) draws a frame in about 8 seconds. On CPU the same frame takes about 3 minutes. On cards under 8 GB the models are offloaded to RAM when not in use, so they fit.
 
 ## Usage
 
@@ -72,9 +74,14 @@ Options:
 - `--output DIR`: output folder (default `output`).
 - `--no-open`: don't open the PDF when done.
 
-Environment variables (can go in a `.env` file): `GEMINI_API_KEY` for the Gemini backend, `SD_MODEL_ID` to use a different Stable Diffusion checkpoint, `SD_SEED` to change the seed shared by all frames (default 42, which keeps the frames visually consistent).
+Environment variables (can go in a `.env` file):
 
-The script is parsed as a screenplay: scene headings (`INT.` / `EXT.`), character cues and dialogue are separated, so the image prompt describes only what the camera sees (location, action, mood). This keeps it short enough for Stable Diffusion's 77-token CLIP limit.
+- `GEMINI_API_KEY`: enables the Gemini backend.
+- `SD_MODEL_ID`: a different Stable Diffusion 1.5 checkpoint.
+- `SD_SEED`: base seed (default 42). Shot N uses seed + N, so a run is reproducible but shots in the same place do not come out as copies of each other.
+- `SD_REFERENCE_STRENGTH`: experimental. Uses each scene's first frame as an IP-Adapter reference for its other shots (e.g. `0.3`), which keeps the place and people more alike but also copies the composition, so close-ups tend to come out wide. Off by default. Turning it on downloads a 2.5 GB image encoder once.
+
+How a script becomes frames: each scene heading (`INT.` / `EXT.`) starts a scene, and each paragraph of action inside it starts a shot. Dialogue belongs to the shot it follows. The image prompt describes only what the camera sees (location, framing, action, mood), which keeps it within Stable Diffusion's 77-token limit. The dialogue goes in the caption under the frame.
 
 ### API
 
@@ -82,15 +89,32 @@ The script is parsed as a screenplay: scene headings (`INT.` / `EXT.`), characte
 uvicorn src.api.main:app
 ```
 
-Open http://127.0.0.1:8000 for a simple upload page: pick a script and get the storyboard PDF back.
+Open http://127.0.0.1:8000 for the upload page. Pick a script, watch the frame-by-frame progress, and the PDF downloads when it's done.
 
-`POST /analyze-script` returns the scene analysis as JSON. `POST /generate-storyboard` returns the PDF. Both take the script as a multipart `file` upload.
+Endpoints (scripts are sent as a multipart `file` upload):
+
+- `POST /analyze-script`: the scene and shot analysis as JSON.
+- `POST /jobs`: queues a storyboard and returns `{"id", "status", "done", "total"}`. Poll `GET /jobs/{id}`, then fetch `GET /jobs/{id}/pdf`. Jobs run one at a time and are kept for an hour.
+- `POST /generate-storyboard`: the same in one blocking request that returns the PDF.
+
+`STORYBOARD_BACKEND` picks the API's image backend (default `auto`).
 
 ### Tests
 
 ```bash
-python -m unittest tests.test_storyboard_generator
+python -m unittest tests.test_storyboard_generator tests.test_api
 ```
+
+The API tests use placeholder frames, so they run in a few seconds without a GPU or API key.
+
+### Windows executable
+
+```bash
+pip install pyinstaller
+python build.py
+```
+
+This produces `dist\Script2Storyboard\Script2Storyboard.exe`. It's a folder build: keep the whole `Script2Storyboard` folder together. It's several GB because it bundles PyTorch. The image and emotion models download on first run, as with the Python version.
 
 ## License
 
